@@ -1,0 +1,16 @@
+numpy
+glob2
+seaborn
+tqdm
+pyyaml
+opencv-python
+pandas
+Pillow
+torch
+torchvision
+scipy
+tensorboard
+matplotlib
+scikit-learn
+clearml
+psutil
