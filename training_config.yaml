@@ -1,0 +1,81 @@
+# Enhanced CNN Training Configuration
+# This file can be used with ClearML for hyperparameter optimization
+
+# Model Configuration
+model:
+  name: "resnet152"  # Options: resnet50, resnet101, resnet152
+  pretrained: true
+  num_classes: 2
+
+# Data Configuration
+data:
+  image_size: 224
+  batch_size: 32
+  num_workers: 6
+  use_weighted_sampling: true
+  
+# Augmentation Configuration
+augmentation:
+  train:
+    random_crop: true
+    horizontal_flip: 0.5
+    vertical_flip: 0.1
+    rotation_degrees: 15
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    gaussian_blur_prob: 0.3
+    random_erasing_prob: 0.3
+  
+# Training Configuration
+training:
+  epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: "cosine"  # Options: plateau, cosine, onecycle
+  patience: 10
+  min_delta: 0.001
+  
+# Optimizer Configuration
+optimizer:
+  type: "adamw"
+  backbone_lr_multiplier: 0.1  # Lower LR for pretrained backbone
+  eps: 1e-8
+  
+# Loss Configuration
+loss:
+  type: "crossentropy"
+  label_smoothing: 0.1
+  
+# Regularization Configuration
+regularization:
+  dropout_rates: [0.5, 0.3, 0.2]  # For classifier layers
+  gradient_clip_norm: 1.0
+  
+# Validation Configuration
+validation:
+  test_time_augmentation: false
+  cross_validation: false
+  cv_folds: 5
+  
+# ClearML Configuration
+clearml:
+  project_name: "CNN-ResNet-Optimization"
+  task_name: "advanced_resnet_training"
+  stream_artifacts: true
+  
+# Hardware Configuration
+hardware:
+  mixed_precision: true
+  pin_memory: true
+  persistent_workers: true
+  
+# Hyperparameter Search Ranges (for ClearML optimization)
+search_ranges:
+  learning_rate: [1e-5, 1e-2]
+  weight_decay: [1e-6, 1e-3]
+  batch_size: [16, 32, 64]
+  dropout_rate: [0.1, 0.7]
+  label_smoothing: [0.0, 0.3]
