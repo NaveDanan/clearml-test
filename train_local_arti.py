@@ -36,12 +36,12 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 import psutil
 
-# print("Searching for resnet152 model...")
-# if os.path.exists('resnet152-b121ed2d.pth'):
-#     print("resnet152 model found.")
-# else:
-#     print("Downloading resnet152 model...")
-#     torch.hub.download_url_to_file('https://download.pytorch.org/models/resnet152-b121ed2d.pth', 'resnet152-b121ed2d.pth')
+print("Searching for resnet152 model...")
+if os.path.exists('resnet152-b121ed2d.pth'):
+    print("resnet152 model found.")
+else:
+    print("Downloading resnet152 model...")
+    torch.hub.download_url_to_file('https://download.pytorch.org/models/resnet152-b121ed2d.pth', 'resnet152-b121ed2d.pth')
 
 # Initialize ClearML Task
 # This should be one of the first lines in your script
