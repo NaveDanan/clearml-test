@@ -1112,7 +1112,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Script')
     parser.add_argument('-d', '--data-dir', type=str, default=os.path.abspath('data_dir'), help='Directory where the data is stored')
     parser.add_argument('--image-size', type=int, default=224, help='Choose image size to resize to train the model')
-    parser.add_argument('-m', '--multi', type=int, default=6, help='Multiplier for dataset augmentation')
+    parser.add_argument('-m', '--multi', type=int, default=1, help='Multiplier for dataset augmentation')
     parser.add_argument('-w', '--workers', type=int, default=6, help='Number of workers for data loading')
     parser.add_argument('-b', '--batch', type=int, default=32, help='Batch size for data loading')
     parser.add_argument('-o', '--output', type=str, default='.', help='Directory to save the best model')
