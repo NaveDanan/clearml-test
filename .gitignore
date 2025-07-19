@@ -8,3 +8,24 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Large model files
+*.pth
+*.pt
+*.ckpt
+*.model
+*.bin
+
+# Dataset and data files
+/data/
+/datasets/
+*.csv
+*.json
+*.pickle
+*.pkl
+
+# Training outputs
+/runs/
+/logs/
+/output/
+/checkpoints/

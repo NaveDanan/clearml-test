@@ -36,24 +36,35 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 import psutil
 
-print("Searching for resnet152 model...")
-if os.path.exists('resnet152-b121ed2d.pth'):
-    print("resnet152 model found.")
-else:
-    print("Downloading resnet152 model...")
-    torch.hub.download_url_to_file('https://download.pytorch.org/models/resnet152-b121ed2d.pth', 'resnet152-b121ed2d.pth')
+# print("Searching for resnet152 model...")
+# if os.path.exists('resnet152-b121ed2d.pth'):
+#     print("resnet152 model found.")
+# else:
+#     print("Downloading resnet152 model...")
+#     torch.hub.download_url_to_file('https://download.pytorch.org/models/resnet152-b121ed2d.pth', 'resnet152-b121ed2d.pth')
 
 # Initialize ClearML Task
 # This should be one of the first lines in your script
-task = Task.init(project_name='new-ResNet-pytorch', task_name='Training-HQ', output_uri=True)
+task = Task.init(project_name='new-ResNet-pytorch', task_name='train_local_arti', output_uri=True)
 
 class EarlyStopping:
-    def __init__(self, patience=5, verbose=False):
+    def __init__(self, patience=5, verbose=False, task=None, stream_artifacts=False):
+        """
+        Early stops the training if validation loss doesn't improve after a given patience.
+        Args:
+            patience (int): How long to wait after last time validation loss improved.
+            verbose (bool): If True, prints a message for each validation loss improvement.
+            task (Task): ClearML Task object for logging.
+            stream_artifacts (bool): If True, uploads artifacts immediately; otherwise uploads at the end.
+        """
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
         self.best_loss = None
         self.early_stop = False
+        self.task = task
+        self.stream_artifacts = stream_artifacts
+
     def __call__(self,val_loss, model, save_path):
         if self.best_loss is None:
             self.best_loss = val_loss
@@ -72,7 +83,10 @@ class EarlyStopping:
         ''' save model when validation loss decreases.'''
         if self.verbose:
             print(f'Validation loss decreased ({self.best_loss:.6f} --> {val_loss:.6f}). Saving model ...')
-            torch.save(model.state_dict(), os.path.join(save_path, 'checkpoint.pth'))
+        ckpt_path = os.path.join(save_path, 'checkpoint.pth')
+        torch.save(model.state_dict(), ckpt_path)
+        if self.stream_artifacts:
+            self.task.upload_artifact('checkpoint', ckpt_path)
 #######################
 # Custom dataset class
 #######################
@@ -175,11 +189,6 @@ def data_prep(data_dir, multiplier, workers, batch_size, image_size, aug_params)
     sample_weights = [class_weights[label].item() for label in train_labels]
 
     sampler = torch.utils.data.WeightedRandomSampler(sample_weights, len(sample_weights))
-
-    # Use num_workers=0 on Windows to avoid multiprocessing issues
-    if platform.system() == 'Windows':
-        workers = 0
-        print("Windows detected: Setting num_workers=0 to avoid multiprocessing issues")
 
     train_loader = DataLoader(train_dataset, sampler=sampler, batch_size=batch_size, num_workers=workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
@@ -925,8 +934,13 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
 
     # Initialize confusion matrix
     Confusion_Matrix = ConfusionMatrix(nc=2)  # Assuming binary classification: pass, fail
-    early_stopping = EarlyStopping(patience=patience, verbose=True)
-
+    early_stopping = EarlyStopping(
+        patience=patience, 
+        verbose=True,
+        task=task,
+        stream_artifacts=args.stream_artifacts
+    )
+    
     for epoch in range(num_epochs):
         print(f'Epoch {epoch}/{num_epochs - 1}')
         print('-' * 10)
@@ -1009,6 +1023,8 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
                     best_acc = epoch_acc
                     best_model_wts = model.state_dict()
                     torch.save(best_model_wts, best)
+                    if args.stream_artifacts:
+                        task.upload_artifact(name='best_model', artifact_object=best, metadata={'epoch': epoch})
                     best_acc_epoch = epoch
 
         # This block should be outside the phase loop, running once per epoch
@@ -1020,15 +1036,15 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
         mAP50 = precision
         mAP50_95 = precision
 
-        cm = confusion_matrix(all_labels.numpy(), all_preds.numpy())
-        print(f'confusion matrix:\n {cm}')
+        # cm = confusion_matrix(all_labels.numpy(), all_preds.numpy())
+        # print(f'confusion matrix:\n {cm}')
 
         # Log results to result.txt
         with open(results_file, 'a') as f:
             f.write(f"{epoch} {mem[:-1]} {train_loss_history[-1]:.4f} {train_acc_history[-1]:.4f} {val_loss_history[-1]:.4f} {val_acc_history[-1]:.4f} {precision:.4f} {recall:.4f} {f1:.4f} {mAP50_95:.4f}\n")
 
-        # Saving confusion matrix plot for the current epoch
-        plot_confusion_matrix(output_dir=cm_dir, epoch_num=epoch, cm=cm)
+        # # Saving confusion matrix plot for the current epoch
+        # plot_confusion_matrix(output_dir=cm_dir, epoch_num=epoch, cm=cm)
 
         # Step the scheduler
         if isinstance(scheduler, ReduceLROnPlateau):
@@ -1057,7 +1073,7 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
     # Save performance graphs from the results file
     plot_results(results_file, save_dir=save_dir)
 
-    torch.save(model.state_dict(), last)
+    # torch.save(model.state_dict(), last)
     # Save final confusion matrix plot
     final_cm = Confusion_Matrix.get_matrix()
     Confusion_Matrix.plot(save_dir=save_dir, names=['pass', 'fail'])
@@ -1079,7 +1095,12 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
         f.write(f"Final Validation Precision: {final_precision:.4f}\n")
         f.write(f"Final Validation Recall: {final_recall:.4f}\n")
         f.write(f"Final Validation F1 Score: {final_f1:.4f}\n")
-
+    if not args.stream_artifacts:
+        # Upload the last and best model files to ClearML
+        ckpt = wdir / 'checkpoint.pth'
+        bst = wdir / 'best.pth'
+        task.upload_artifact(name='checkpoint', artifact_object=ckpt, metadata={'Epoch': epoch})
+        task.upload_artifact(name='best', artifact_object=bst, metadata={'Acc': best_acc_epoch})
     return model, epoch + 1, summery
 
 if __name__ == '__main__':
@@ -1092,15 +1113,18 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data-dir', type=str, default=os.path.abspath('data_dir'), help='Directory where the data is stored')
     parser.add_argument('--image-size', type=int, default=224, help='Choose image size to resize to train the model')
     parser.add_argument('-m', '--multi', type=int, default=6, help='Multiplier for dataset augmentation')
-    parser.add_argument('-w', '--workers', type=int, default=8, help='Number of workers for data loading')
-    parser.add_argument('-b', '--batch', type=int, default=16, help='Batch size for data loading')
+    parser.add_argument('-w', '--workers', type=int, default=6, help='Number of workers for data loading')
+    parser.add_argument('-b', '--batch', type=int, default=32, help='Batch size for data loading')
     parser.add_argument('-o', '--output', type=str, default='.', help='Directory to save the best model')
     parser.add_argument('-n', '--name', type=str, default='clear', help='Name of the best model file')
-    parser.add_argument('--project', type=str, default='/runs/train', help='Save to project/name')
-    parser.add_argument('-e', '--epochs', type=int, default=10, help='Number of epochs for training')
-    parser.add_argument('-p', '--patience', type=int, default=10, help='Patience for early stopping')
+    parser.add_argument('--project', type=str, default=os.path.abspath('runs/train'), help='Save to project/name')
+    parser.add_argument('-e', '--epochs', type=int, default=3, help='Number of epochs for training')
+    parser.add_argument('-p', '--patience', type=int, default=1, help='Patience for early stopping')
     parser.add_argument('--device', type=str, default='', help='Device to run the model on')
-
+    # parser.add_argument('--resume', action='store_true', help='Resume training from the last checkpoint')
+    # parser.add_argument('--weights', type=str, default='resnet152-b121ed2d.pth', help='Path to the pretrained weights file')
+    parser.add_argument('--stream-artifacts', action='store_true', dest='stream_artifacts',
+                         help='If set, upload checkpoint.pth and best.pth as soon as they are created; otherwise upload both only once after training finishes')
     # --- MODIFICATION ---
     # Use parse_known_args() to ignore extraneous arguments from Jupyter/Colab
     args, unknown = parser.parse_known_args()
@@ -1171,8 +1195,8 @@ if __name__ == '__main__':
                                           optimizer=optimizer, args=args, device=device)
 
 
-    # Save the trained model
-    torch.save(model.state_dict(), os.path.join(args.save_dir, 'last_model.pth'))
+    # # Save the trained model
+    # torch.save(model.state_dict(), os.path.join(args.save_dir, 'last_model.pth'))
 
     print(f'Training completed in {epochs_completed} epochs.')
 

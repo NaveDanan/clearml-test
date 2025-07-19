@@ -30,6 +30,8 @@ matplotlib.use('Agg')  # Use non-interactive backend
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 import clearml
 from clearml import Task
+import tempfile
+import shutil
 
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
@@ -45,7 +47,7 @@ else:
 
 # Initialize ClearML Task
 # This should be one of the first lines in your script
-task = Task.init(project_name='new-ResNet-pytorch', task_name='Training-HQ', output_uri=True)
+task = Task.init(project_name='new-ResNet-pytorch', task_name='Gemini', output_uri=False)
 
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
@@ -72,7 +74,10 @@ class EarlyStopping:
         ''' save model when validation loss decreases.'''
         if self.verbose:
             print(f'Validation loss decreased ({self.best_loss:.6f} --> {val_loss:.6f}). Saving model ...')
-            torch.save(model.state_dict(), os.path.join(save_path, 'checkpoint.pth'))
+            # Ensure save_path is a Path object for consistency
+            save_path = Path(save_path)
+            save_path.mkdir(parents=True, exist_ok=True)
+            torch.save(model.state_dict(), save_path / 'checkpoint.pth')
 #######################
 # Custom dataset class
 #######################
@@ -177,9 +182,9 @@ def data_prep(data_dir, multiplier, workers, batch_size, image_size, aug_params)
     sampler = torch.utils.data.WeightedRandomSampler(sample_weights, len(sample_weights))
 
     # Use num_workers=0 on Windows to avoid multiprocessing issues
-    if platform.system() == 'Windows':
-        workers = 0
-        print("Windows detected: Setting num_workers=0 to avoid multiprocessing issues")
+    # if platform.system() == 'Windows':
+    #     workers = 0
+    #     print("Windows detected: Setting num_workers=0 to avoid multiprocessing issues")
 
     train_loader = DataLoader(train_dataset, sampler=sampler, batch_size=batch_size, num_workers=workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
@@ -893,10 +898,20 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
 
     save_dir, num_epochs, patience = Path(args.save_dir), args.epochs, args.patience
     # Directories
-    wdir = save_dir / 'weights'
-    wdir.mkdir(parents=True, exist_ok=True) #make dir
-    last = wdir / 'last.pth'
-    best = wdir / 'best.pth'
+    # --- MODIFICATION: Determine checkpoint directory based on streaming flag ---
+    if args.stream_artifacts:
+        # If streaming, save directly to the ClearML output directory's weights folder
+        checkpoint_dir = save_dir / 'weights'
+        print(f"Artifacts will be streamed to ClearML from: {checkpoint_dir}")
+    else:
+        # If not streaming, create a temporary local directory for checkpoints
+        checkpoint_dir = Path(tempfile.mkdtemp())
+        print(f"Artifacts will be saved locally to {checkpoint_dir} and uploaded at the end of the run.")
+    
+    checkpoint_dir.mkdir(parents=True, exist_ok=True) # Ensure the directory exists
+    
+    last = checkpoint_dir / 'last.pth'
+    best = checkpoint_dir / 'best.pth'
     results_file = save_dir / 'results.txt'
     summery = save_dir / 'summery.txt'
     log_dir = save_dir / 'log_dir'
@@ -1039,7 +1054,8 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
         print()
 
         # Early stopping check
-        early_stopping(val_loss_history[-1], model, args.save_dir)
+        # --- MODIFICATION: Pass the correct checkpoint_dir to early stopping ---
+        early_stopping(val_loss_history[-1], model, checkpoint_dir)
         if early_stopping.early_stop:
             print(f'Training stopped early after {epoch + 1} epochs due to no improvement in validation loss.')
             break
@@ -1080,7 +1096,8 @@ def train_model(args, scheduler, model, train_loader, val_loader, criterion, opt
         f.write(f"Final Validation Recall: {final_recall:.4f}\n")
         f.write(f"Final Validation F1 Score: {final_f1:.4f}\n")
 
-    return model, epoch + 1, summery
+    # --- MODIFICATION: Return checkpoint_dir for final upload/cleanup ---
+    return model, epoch + 1, summery, checkpoint_dir
 
 if __name__ == '__main__':
     # Set multiprocessing start method for Windows compatibility
@@ -1092,22 +1109,23 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data-dir', type=str, default=os.path.abspath('data_dir'), help='Directory where the data is stored')
     parser.add_argument('--image-size', type=int, default=224, help='Choose image size to resize to train the model')
     parser.add_argument('-m', '--multi', type=int, default=6, help='Multiplier for dataset augmentation')
-    parser.add_argument('-w', '--workers', type=int, default=8, help='Number of workers for data loading')
+    parser.add_argument('-w', '--workers', type=int, default=3, help='Number of workers for data loading')
     parser.add_argument('-b', '--batch', type=int, default=16, help='Batch size for data loading')
     parser.add_argument('-o', '--output', type=str, default='.', help='Directory to save the best model')
     parser.add_argument('-n', '--name', type=str, default='clear', help='Name of the best model file')
     parser.add_argument('--project', type=str, default='/runs/train', help='Save to project/name')
-    parser.add_argument('-e', '--epochs', type=int, default=10, help='Number of epochs for training')
-    parser.add_argument('-p', '--patience', type=int, default=10, help='Patience for early stopping')
+    parser.add_argument('-e', '--epochs', type=int, default=3, help='Number of epochs for training')
+    parser.add_argument('-p', '--patience', type=int, default=1, help='Patience for early stopping')
     parser.add_argument('--device', type=str, default='', help='Device to run the model on')
+    # --- MODIFICATION: Add new boolean argument for artifact streaming ---
+    parser.add_argument('--stream_artifacts', action='store_true',
+                        help='If set, upload artifacts during the run. If not set, upload all at the end.')
 
-    # --- MODIFICATION ---
     # Use parse_known_args() to ignore extraneous arguments from Jupyter/Colab
     args, unknown = parser.parse_known_args()
 
     # --- ClearML Integration: Connect arguments and other parameters ---
-    # `task` is already initialized at the top of the script
-    task.connect(args, name='Hyperparameters')
+    task.connect(vars(args), name='Hyperparameters')
 
     augmentation_params = {
         'RandomHorizontalFlip': True,
@@ -1122,7 +1140,6 @@ if __name__ == '__main__':
     args.save_dir = increment_path(Path(args.project) / args.name, exist_ok=False)
 
     # --- ClearML Dataset Integration ---
-    # This automatically logs which dataset version is being used
     The_data_dir = clearml.Dataset.get(dataset_name="Dogs-vs-Cats", alias="wallak_data").get_local_copy()
 
     # Data preparation
@@ -1166,11 +1183,37 @@ if __name__ == '__main__':
     # ---------------------------------------------------------------------
 
     # Train the model
-    model, epochs_completed, summery = train_model(model=model, scheduler=scheduler, train_loader=train_loader,
+    # --- MODIFICATION: Capture the returned checkpoint_dir ---
+    model, epochs_completed, summery, checkpoint_dir = train_model(model=model, scheduler=scheduler, train_loader=train_loader,
                                           val_loader=val_loader, criterion=criterion,
                                           optimizer=optimizer, args=args, device=device)
 
+    # --- MODIFICATION: UPLOAD ARTIFACTS AT THE END IF NOT STREAMING ---
+    if not args.stream_artifacts:
+        print("Uploading final model artifacts to ClearML...")
+        
+        # Define paths to the saved models in the temporary directory
+        best_model_path = checkpoint_dir / 'best.pth'
+        last_model_path = checkpoint_dir / 'last.pth'
+        checkpoint_path = checkpoint_dir / 'checkpoint.pth'
+        
+        # Upload artifacts if they exist, placing them in the 'weights' virtual folder
+        if best_model_path.exists():
+            task.upload_artifact(name='weights/best.pth', artifact_object=str(best_model_path))
+        if last_model_path.exists():
+            task.upload_artifact(name='weights/last.pth', artifact_object=str(last_model_path))
+        if checkpoint_path.exists():
+            task.upload_artifact(name='weights/checkpoint.pth', artifact_object=str(checkpoint_path))
 
+        print("Artifact upload complete.")
+        
+        # Clean up the temporary directory
+        try:
+            shutil.rmtree(checkpoint_dir)
+            print(f"Cleaned up temporary directory: {checkpoint_dir}")
+        except Exception as e:
+            print(f"Error cleaning up temporary directory {checkpoint_dir}: {e}")
+    
     # Save the trained model
     torch.save(model.state_dict(), os.path.join(args.save_dir, 'last_model.pth'))
 
